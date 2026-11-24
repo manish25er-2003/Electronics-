@@ -620,6 +620,15 @@ export default function App() {
         .animate-marquee-infinite:hover {
           animation-play-state: paused;
         }
+        .marquee-track {
+          mask-image: linear-gradient(to right, transparent, black 3%, black 97%, transparent);
+          -webkit-mask-image: linear-gradient(to right, transparent, black 3%, black 97%, transparent);
+        }
+        @media (max-width: 640px) {
+          .animate-marquee-infinite {
+            animation-duration: 24s;
+          }
+        }
         @keyframes floatSlow {
           0%, 100% { transform: translateY(0px); }
           50% { transform: translateY(-6px); }
@@ -641,12 +650,12 @@ export default function App() {
           PREMIUM GLASSMORPHIC HEADER (5-SECTION NAVIGATION + ADMIN SWITCH)
          ===================================================================== */}
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-2xl border-b border-slate-200/80 shadow-2xs">
-        <div className="bg-gradient-to-r from-[#0B1120] via-[#101828] to-[#172554] text-white text-[11px] sm:text-xs py-1.5">
-          <div className="site-container flex items-center justify-between gap-2">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="inline-flex items-center gap-1.5 text-slate-200 truncate">
+        <div className="bg-gradient-to-r from-[#0B1120] via-[#101828] to-[#172554] text-white text-[11px] sm:text-xs py-3 sm:py-2">
+          <div className="site-container flex flex-col sm:flex-row items-center justify-center sm:justify-between gap-2">
+            <div className="flex items-center justify-center gap-2 min-w-0 w-full sm:w-auto">
+              <span className="inline-flex items-center justify-center gap-1.5 text-slate-200 text-center">
                 <MapPin className="w-3.5 h-3.5 text-[#00C2FF] flex-shrink-0" />
-                <span className="truncate">{storeSettings.address}</span>
+                <span>{storeSettings.address}</span>
               </span>
               <span className="hidden md:inline-flex items-center gap-1.5 text-slate-400 border-l border-white/15 pl-3">
                 <Clock className="w-3.5 h-3.5 text-[#00C2FF]" />
@@ -658,7 +667,7 @@ export default function App() {
                 setPageMode(pageMode === 'store' ? 'admin' : 'store');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-gradient-to-r from-[#2563EB] to-[#0284C7] hover:brightness-110 text-white font-bold shadow-sm transition flex-shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-[#2563EB] to-[#0284C7] hover:brightness-110 text-white font-bold shadow-sm transition flex-shrink-0"
             >
               {pageMode === 'store' ? (
                 <>
@@ -675,14 +684,14 @@ export default function App() {
           </div>
         </div>
 
-        <div className="site-container py-3 flex items-center justify-between gap-3">
+        <div className="site-container min-h-[68px] sm:min-h-[72px] py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
           {/* Brand Monogram & Title */}
           <button
             onClick={() => {
               setPageMode('store');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className="flex items-center gap-3 text-left group min-w-0"
+            className="flex-1 sm:flex-none flex items-center justify-center sm:justify-start gap-2 sm:gap-3 text-center sm:text-left group min-w-0"
           >
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-br from-[#0B1120] via-[#1E3A8A] to-[#2563EB] flex items-center justify-center shadow-md ring-1 ring-black/5 flex-shrink-0 group-hover:scale-105 transition-transform">
               <svg viewBox="0 0 36 36" className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none">
@@ -822,7 +831,7 @@ export default function App() {
             onMouseEnter={() => setSliderPaused(true)}
             onMouseLeave={() => setSliderPaused(false)}
           >
-            <div className="site-container pt-12 sm:pt-16 lg:pt-20 pb-10 relative z-10">
+            <div className="site-container pt-10 sm:pt-12 lg:pt-14 pb-8 relative z-10">
               {HERO_SLIDES.map((slide, idx) => {
                 if (idx !== activeSlide) return null;
                 return (
@@ -963,10 +972,16 @@ export default function App() {
             </div>
 
             {/* INFINITE SEAMLESS BRAND & DEPARTMENT MARQUEE STRIP */}
-            <div className="bg-black/30 border-t border-white/10 py-3.5 overflow-hidden">
-              <div className="animate-marquee-infinite flex items-center gap-3">
+            <div className="marquee-track bg-[#0B1120]/80 border-t border-white/10 py-3.5 sm:py-4 overflow-hidden">
+              <div className="site-container mb-2.5 flex items-center justify-center sm:justify-start">
+                <span className="inline-flex items-center gap-2 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#00C2FF]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00C2FF] shadow-[0_0_12px_rgba(0,194,255,0.8)]" />
+                  Popular brands & services
+                </span>
+              </div>
+              <div className="animate-marquee-infinite flex items-center">
                 {[...Array(2)].map((_, loopIdx) => (
-                  <div key={loopIdx} className="flex items-center gap-3 pr-3">
+                  <div key={loopIdx} className="flex items-center gap-2.5 pr-2.5">
                     {['Apple', 'Samsung', 'OnePlus', 'Xiaomi', 'Redmi', 'Vivo', 'Oppo', 'Realme', 'LG', 'Sony'].map((brand) => (
                       <button
                         key={`${loopIdx}-${brand}`}
@@ -974,14 +989,19 @@ export default function App() {
                           setSelectedBrand(brand);
                           scrollToSection('section-2-catalog');
                         }}
-                        className="px-4 py-1.5 rounded-full bg-white/8 hover:bg-[#00C2FF] hover:text-[#101828] border border-white/10 text-xs font-extrabold tracking-wide text-slate-200 transition whitespace-nowrap"
+                        className="min-w-[88px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-[#2563EB] border border-white/10 hover:border-[#2563EB] text-xs sm:text-sm font-extrabold tracking-wide text-white transition whitespace-nowrap shadow-sm"
                       >
                         {brand}
                       </button>
                     ))}
-                    <span className="text-xs font-bold text-[#00C2FF] px-3 whitespace-nowrap">
-                      ★ Mobiles • Refurbished Phones • Screen & Battery Repair • Refrigerators • Washing Machines • LED TVs
-                    </span>
+                    {['Screen Repair', 'Battery Repair', 'Refurbished Phones', 'LED TVs', 'Home Appliances'].map((service) => (
+                      <span
+                        key={`${loopIdx}-${service}`}
+                        className="px-4 py-2 rounded-xl bg-[#00C2FF]/10 border border-[#00C2FF]/20 text-[11px] sm:text-xs font-bold text-[#79DFFF] whitespace-nowrap"
+                      >
+                        {service}
+                      </span>
+                    ))}
                   </div>
                 ))}
               </div>
@@ -991,7 +1011,7 @@ export default function App() {
           {/* =================================================================
               SECTION 2: ALL 11 CATEGORIES & FILTERABLE PRODUCT SHOWCASE
              ================================================================= */}
-          <section id="section-2-catalog" className="py-16 md:py-20 bg-white">
+          <section id="section-2-catalog" className="store-section bg-white">
             <div className="site-container space-y-12">
               {/* Header + 11 Visual Category Strip */}
               <div>
@@ -1156,7 +1176,7 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {filteredProducts.map((product) => (
                     <ProductCard
                       key={product.id}
@@ -1179,7 +1199,7 @@ export default function App() {
           {/* =================================================================
               SECTION 3: EXPRESS MOBILE REPAIR CENTER & BOOKING FORM
              ================================================================= */}
-          <section id="section-3-repair" className="py-16 md:py-20 bg-[#101828] text-white">
+          <section id="section-3-repair" className="store-section bg-[#101828] text-white">
             <div className="site-container space-y-12">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
                 <div className="lg:col-span-7 space-y-4">
@@ -1323,7 +1343,7 @@ export default function App() {
           {/* =================================================================
               SECTION 4: SPECIAL DEALS, ABOUT VERMA ELECTRONICS & REVIEWS
              ================================================================= */}
-          <section id="section-4-deals" className="py-16 md:py-20 bg-[#F3F6FA] border-b border-slate-200">
+          <section id="section-4-deals" className="store-section bg-[#F3F6FA] border-b border-slate-200">
             <div className="site-container space-y-14">
               {/* Editable Special Deals */}
               <div>
@@ -1470,8 +1490,8 @@ export default function App() {
           {/* =================================================================
               SECTION 5: SHOWROOM LOCATION, CONTACT & FOOTER
              ================================================================= */}
-          <section id="section-5-contact" className="pt-16 md:pt-20 bg-white">
-            <div className="site-container pb-16">
+          <section id="section-5-contact" className="store-section bg-white">
+            <div className="site-container pb-8">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 <div className="lg:col-span-6 space-y-5">
                   <span className="inline-block px-3 py-1 rounded-full bg-[#2563EB]/10 text-[#2563EB] text-xs font-bold uppercase">
