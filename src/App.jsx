@@ -4,8 +4,18 @@ import {
   Smartphone, Wrench, ShieldCheck, Award, Zap, Users,
   MapPin, Clock, Send, Plus, Trash2, SlidersHorizontal, ArrowUpRight,
   Eye, Settings, Package, Tag, ExternalLink, Info, BatteryCharging,
-  Volume2, Camera, Droplets, Terminal, Unlock, Sparkles, Store
+  Volume2, Camera, Droplets, Terminal, Unlock, Sparkles, Store, ImagePlus,
+  LoaderCircle
 } from 'lucide-react';
+import {
+  deleteRemoteProduct,
+  fetchAdminProducts,
+  fetchPublicProducts,
+  isProductApiConfigured,
+  saveRemoteProduct,
+  uploadRemoteProductImage,
+  verifyAdminSession,
+} from './services/productApi.js';
 
 /**
  * VERMA ELECTRONICS - MAIN SARDARPURA, LALRU, PUNJAB, INDIA
@@ -44,6 +54,22 @@ const IMAGES = {
   heroSlide1: 'https://images.unsplash.com/photo-1616348436168-de43ad0db179?auto=format&fit=crop&w=1400&q=85',
   heroSlide3: 'https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=1400&q=85',
   heroSlide4: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=1400&q=85',
+};
+
+const EMPTY_PRODUCT_FORM = {
+  name: '',
+  brand: '',
+  category: 'Latest Smartphones',
+  price: '',
+  discountPrice: '',
+  condition: 'New',
+  image: '',
+  specsText: '',
+  shortDescription: '',
+  description: '',
+  availabilityStatus: 'in_stock',
+  isFeatured: false,
+  published: true,
 };
 
 const SafeImage = ({ src, alt, className = '', fallbackLabel = 'Verma Electronics' }) => {
@@ -256,6 +282,48 @@ const INITIAL_PRODUCTS = [
   },
 ];
 
+function normalizeProduct(product) {
+  return {
+    ...product,
+    name: product.name || '',
+    brand: product.brand || '',
+    category: product.category || '',
+    price: Number(product.price) || 0,
+    discountPrice: Number(product.discountPrice) || null,
+    image: product.image || '',
+    images: Array.isArray(product.images) ? product.images : [],
+    shortDescription: product.shortDescription || product.description || '',
+    description: product.description || '',
+    specs: Array.isArray(product.specs) ? product.specs : [],
+    availabilityStatus: product.availabilityStatus || 'in_stock',
+    isFeatured: product.isFeatured === true,
+    published: product.published !== false,
+    condition: product.condition || 'New',
+  };
+}
+
+function getProductImageUrls(product) {
+  const additionalImages = (Array.isArray(product.images) ? product.images : [])
+    .map((image) => (typeof image === 'string' ? image : image?.url))
+    .filter((url) => typeof url === 'string' && url.length > 0);
+  return Array.from(new Set([product.image, ...additionalImages].filter(Boolean)));
+}
+
+function getAvailabilityLabel(status) {
+  const labels = {
+    in_stock: 'In stock',
+    available: 'Available',
+    preorder: 'Pre-order',
+    out_of_stock: 'Out of stock',
+    unavailable: 'Unavailable',
+  };
+  return labels[status] || String(status || 'Unavailable').replaceAll('_', ' ');
+}
+
+function isProductAvailable(status) {
+  return ['in_stock', 'available', 'preorder'].includes(status);
+}
+
 const INITIAL_OFFERS = [
   {
     id: 'off-1',
@@ -341,8 +409,11 @@ export default function App() {
   const [pageMode, setPageMode] = useState('store');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [activeProductImage, setActiveProductImage] = useState('');
   const [enquiryDrawerOpen, setEnquiryDrawerOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [productsLoading, setProductsLoading] = useState(isProductApiConfigured);
+  const [productApiError, setProductApiError] = useState('');
 
   // Persistent Store Settings
   const [storeSettings, setStoreSettings] = useState(() => {
@@ -365,13 +436,14 @@ export default function App() {
 
   // Persistent Products
   const [products, setProducts] = useState(() => {
+    if (isProductApiConfigured) return [];
     try {
       const saved = localStorage.getItem('ve_v3_products');
-      if (saved) return JSON.parse(saved);
+      if (saved) return JSON.parse(saved).map(normalizeProduct);
     } catch {
       // Fall back to defaults when localStorage is unavailable or contains invalid JSON.
     }
-    return INITIAL_PRODUCTS;
+    return INITIAL_PRODUCTS.map(normalizeProduct);
   });
 
   // Persistent Offers
@@ -422,7 +494,9 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('ve_v3_settings', JSON.stringify(storeSettings));
-      localStorage.setItem('ve_v3_products', JSON.stringify(products));
+      if (!isProductApiConfigured) {
+        localStorage.setItem('ve_v3_products', JSON.stringify(products));
+      }
       localStorage.setItem('ve_v3_offers', JSON.stringify(offers));
       localStorage.setItem('ve_v3_repairs', JSON.stringify(repairBookings));
       localStorage.setItem('ve_v3_enquiries', JSON.stringify(enquiries));
@@ -442,6 +516,78 @@ export default function App() {
     const encoded = encodeURIComponent(text);
     const url = cleanNum ? `https://wa.me/${cleanNum}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  useEffect(() => {
+    if (!isProductApiConfigured) return undefined;
+    let active = true;
+    fetchPublicProducts()
+      .then((items) => {
+        if (active) {
+          setProducts(items.map(normalizeProduct));
+          setProductApiError('');
+        }
+      })
+      .catch((error) => {
+        if (active) setProductApiError(`Could not load products: ${error.message}`);
+      })
+      .finally(() => {
+        if (active) setProductsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProduct) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setSelectedProduct(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [selectedProduct]);
+
+  const openAdminPanel = async () => {
+    try {
+      if (isProductApiConfigured) {
+        await verifyAdminSession();
+        const adminProducts = await fetchAdminProducts();
+        setProducts(adminProducts.map(normalizeProduct));
+      } else {
+        showToast('Local demo mode: changes are saved only in this browser.', 'info');
+      }
+      setPageMode('admin');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  };
+
+  const returnToStorefront = async () => {
+    if (isProductApiConfigured) {
+      try {
+        const publicProducts = await fetchPublicProducts();
+        setProducts(publicProducts.map(normalizeProduct));
+      } catch (error) {
+        showToast(`Could not refresh the public catalog: ${error.message}`, 'error');
+      }
+    }
+    setPageMode('store');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openProductDetails = (product) => {
+    setActiveProductImage(product.image || '');
+    setSelectedProduct(product);
   };
 
   // Hero Slider Autoplay
@@ -489,6 +635,7 @@ export default function App() {
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
+      if (p.published === false) return false;
       const matchSearch =
         !searchQuery.trim() ||
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -499,9 +646,10 @@ export default function App() {
       const matchCond = selectedCondition === 'All' || p.condition === selectedCondition;
 
       let matchPrice = true;
-      if (selectedPriceRange === 'under10k') matchPrice = p.price < 10000;
-      else if (selectedPriceRange === '10kto35k') matchPrice = p.price >= 10000 && p.price <= 35000;
-      else if (selectedPriceRange === 'above35k') matchPrice = p.price > 35000;
+      const currentPrice = p.discountPrice || p.price;
+      if (selectedPriceRange === 'under10k') matchPrice = currentPrice < 10000;
+      else if (selectedPriceRange === '10kto35k') matchPrice = currentPrice >= 10000 && currentPrice <= 35000;
+      else if (selectedPriceRange === 'above35k') matchPrice = currentPrice > 35000;
 
       return matchSearch && matchCat && matchBrand && matchCond && matchPrice;
     });
@@ -663,10 +811,7 @@ export default function App() {
               </span>
             </div>
             <button
-              onClick={() => {
-                setPageMode(pageMode === 'store' ? 'admin' : 'store');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
+              onClick={pageMode === 'store' ? openAdminPanel : returnToStorefront}
               className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-[#2563EB] to-[#0284C7] hover:brightness-110 text-white font-bold shadow-sm transition flex-shrink-0"
             >
               {pageMode === 'store' ? (
@@ -786,10 +931,9 @@ export default function App() {
               </button>
             ))}
             <button
-              onClick={() => {
+              onClick={async () => {
                 setMobileMenuOpen(false);
-                setPageMode('admin');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                await openAdminPanel();
               }}
               className="w-full py-3 rounded-xl bg-[#101828] text-white text-sm font-bold flex items-center justify-center gap-2 mt-2"
             >
@@ -817,11 +961,9 @@ export default function App() {
           setReviews={setReviews}
           storeSettings={storeSettings}
           setStoreSettings={setStoreSettings}
+          apiEnabled={isProductApiConfigured}
           showToast={showToast}
-          onBackToStore={() => {
-            setPageMode('store');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
+          onBackToStore={returnToStorefront}
         />
       ) : (
         <main>
@@ -1159,9 +1301,21 @@ export default function App() {
               </div>
 
               {/* Product Grid */}
-              {filteredProducts.length === 0 ? (
+              {productsLoading ? (
+                <div className="flex items-center justify-center gap-3 py-14 text-slate-600">
+                  <LoaderCircle className="w-5 h-5 animate-spin" />
+                  <span className="text-sm font-semibold">Loading products…</span>
+                </div>
+              ) : productApiError ? (
+                <div role="alert" className="text-center py-10 px-4 bg-rose-50 rounded-3xl border border-rose-200 text-rose-800">
+                  <p className="font-bold">Products could not be loaded</p>
+                  <p className="mt-1 text-sm">{productApiError}</p>
+                </div>
+              ) : filteredProducts.length === 0 ? (
                 <div className="text-center py-14 bg-[#F3F6FA] rounded-3xl border border-dashed border-slate-300">
-                  <p className="text-base font-bold text-[#101828]">No products match your current filter</p>
+                  <p className="text-base font-bold text-[#101828]">
+                    {products.length === 0 ? 'No products are available right now.' : 'No products match your current filter'}
+                  </p>
                   <button
                     onClick={() => {
                       setSearchQuery('');
@@ -1183,10 +1337,10 @@ export default function App() {
                       product={product}
                       isSaved={enquiryList.some((i) => i.id === product.id)}
                       onToggleSave={() => toggleEnquiryItem(product)}
-                      onViewDetails={() => setSelectedProduct(product)}
+                      onViewDetails={() => openProductDetails(product)}
                       onWhatsApp={() =>
                         openWhatsAppEnquiry(
-                          `Hello Verma Electronics (Lalru), I want to enquire about:\n• Product: ${product.name}\n• Condition: ${product.condition}\n• Demo Price: ₹${product.price.toLocaleString('en-IN')}\nPlease share live availability and today's price.`
+                          `Hello Verma Electronics (Lalru), I want to enquire about:\n• Product: ${product.name}\n• Condition: ${product.condition}\n• Price: ₹${(product.discountPrice || product.price).toLocaleString('en-IN')}\nPlease confirm live availability.`
                         )
                       }
                     />
@@ -1612,10 +1766,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-4">
                   <button
-                    onClick={() => {
-                      setPageMode('admin');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
+                    onClick={openAdminPanel}
                     className="text-[#00C2FF] font-bold hover:underline"
                   >
                     Owner Admin Edit Page
@@ -1642,40 +1793,98 @@ export default function App() {
 
       {/* Product Details Modal */}
       {selectedProduct && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-2 sm:p-4">
-          <div className="bg-white rounded-3xl max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
-              <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-800 text-xs font-bold">
-                Demo Showcase Item • {selectedProduct.condition}
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedProduct(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-details-title"
+            className="bg-white rounded-t-3xl sm:rounded-3xl max-w-5xl w-full max-h-[94vh] sm:max-h-[90vh] flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0">
+              <span className="px-2.5 py-1 rounded-full bg-[#F3F6FA] text-slate-700 text-xs font-bold">
+                {selectedProduct.condition} • {getAvailabilityLabel(selectedProduct.availabilityStatus)}
               </span>
-              <button onClick={() => setSelectedProduct(null)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-[#F3F6FA]">
+              <button
+                type="button"
+                aria-label="Close product details"
+                onClick={() => setSelectedProduct(null)}
+                className="w-9 h-9 flex items-center justify-center rounded-xl bg-[#F3F6FA]"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 overflow-y-auto space-y-4">
-              <div className="aspect-[4/3] max-h-56 mx-auto bg-[#F8FAFC] rounded-2xl p-4 flex items-center justify-center">
-                <SafeImage src={selectedProduct.image} alt={selectedProduct.name} className="max-h-full max-w-full object-contain" />
+            <div className="grid md:grid-cols-2 min-h-0 overflow-y-auto">
+              <div className="p-5 md:p-8 bg-[#F8FAFC] flex flex-col gap-3">
+                <div className="aspect-square max-h-[48vh] md:max-h-[60vh] w-full bg-white rounded-2xl p-5 flex items-center justify-center">
+                  <SafeImage
+                    src={activeProductImage || selectedProduct.image}
+                    alt={selectedProduct.name}
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+                {getProductImageUrls(selectedProduct).length > 1 && (
+                  <div className="flex gap-2 overflow-x-auto">
+                    {getProductImageUrls(selectedProduct).map((imageUrl) => (
+                      <button
+                        key={imageUrl}
+                        type="button"
+                        aria-label={`View another image of ${selectedProduct.name}`}
+                        onClick={() => setActiveProductImage(imageUrl)}
+                        className={`w-16 h-16 shrink-0 rounded-xl bg-white border p-1 ${activeProductImage === imageUrl ? 'border-[#2563EB]' : 'border-slate-200'}`}
+                      >
+                        <SafeImage src={imageUrl} alt="" className="w-full h-full object-contain" />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div>
-                <span className="text-xs font-bold text-[#2563EB] uppercase">{selectedProduct.brand} • {selectedProduct.category}</span>
-                <h3 className="text-xl font-extrabold text-[#101828] mt-0.5">{selectedProduct.name}</h3>
-                <p className="font-price text-2xl font-extrabold text-[#101828] mt-2">
-                  ₹{selectedProduct.price.toLocaleString('en-IN')}{' '}
-                  <span className="text-xs font-normal text-slate-500">(Demo Reference Price)</span>
-                </p>
-              </div>
-              <p className="text-sm text-slate-600">{selectedProduct.description}</p>
-              <div className="flex flex-wrap gap-1.5">
-                {selectedProduct.specs.map((s) => (
-                  <span key={s} className="px-2.5 py-1 rounded-lg bg-[#F3F6FA] text-xs font-semibold text-[#101828]">{s}</span>
-                ))}
+              <div className="p-5 md:p-8 space-y-5">
+                <div>
+                  <span className="text-xs font-bold text-[#2563EB] uppercase">{selectedProduct.brand} • {selectedProduct.category}</span>
+                  <h2 id="product-details-title" className="text-2xl font-extrabold text-[#101828] mt-1">{selectedProduct.name}</h2>
+                  <div className="flex items-baseline gap-2 mt-3">
+                    <p className="font-price text-2xl font-extrabold text-[#101828]">
+                      ₹{(selectedProduct.discountPrice || selectedProduct.price).toLocaleString('en-IN')}
+                    </p>
+                    {(selectedProduct.discountPrice || selectedProduct.originalPrice > selectedProduct.price) && (
+                      <p className="font-price text-sm text-slate-400 line-through">
+                        ₹{(selectedProduct.discountPrice ? selectedProduct.price : selectedProduct.originalPrice).toLocaleString('en-IN')}
+                      </p>
+                    )}
+                  </div>
+                  <p className={`mt-2 text-sm font-semibold ${isProductAvailable(selectedProduct.availabilityStatus) ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    {getAvailabilityLabel(selectedProduct.availabilityStatus)}
+                  </p>
+                </div>
+                {selectedProduct.description && (
+                  <section>
+                    <h3 className="font-bold text-[#101828]">Product details</h3>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-600 whitespace-pre-line">{selectedProduct.description}</p>
+                  </section>
+                )}
+                {selectedProduct.specs.length > 0 && (
+                  <section>
+                    <h3 className="font-bold text-[#101828]">Features & specifications</h3>
+                    <ul className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {selectedProduct.specs.map((spec) => (
+                        <li key={spec} className="px-3 py-2 rounded-xl bg-[#F3F6FA] text-sm text-slate-700">{spec}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
               </div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2 shrink-0">
               <button
+                type="button"
                 onClick={() =>
                   openWhatsAppEnquiry(
-                    `Hello Verma Electronics (Lalru), I want to enquire about ${selectedProduct.name} (Demo Price: ₹${selectedProduct.price.toLocaleString('en-IN')}).`
+                    `Hello Verma Electronics (Lalru), I want to enquire about ${selectedProduct.name} (Price: ₹${(selectedProduct.discountPrice || selectedProduct.price).toLocaleString('en-IN')}).`
                   )
                 }
                 className="flex-1 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2"
@@ -1684,6 +1893,7 @@ export default function App() {
                 Enquire on WhatsApp
               </button>
               <button
+                type="button"
                 onClick={() => toggleEnquiryItem(selectedProduct)}
                 className="px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm font-bold"
               >
@@ -1746,7 +1956,11 @@ export default function App() {
  * PRODUCT CARD COMPONENT
  */
 function ProductCard({ product, isSaved, onToggleSave, onViewDetails, onWhatsApp }) {
-  const hasDiscount = product.originalPrice && product.originalPrice > product.price;
+  const displayPrice = product.discountPrice || product.price;
+  const originalPrice = product.discountPrice
+    ? product.price
+    : product.originalPrice > product.price ? product.originalPrice : null;
+  const available = isProductAvailable(product.availabilityStatus);
   return (
     <div className="group bg-white rounded-3xl border border-slate-200/85 hover:border-[#2563EB]/40 shadow-xs hover:shadow-xl transition-all flex flex-col overflow-hidden">
       <div className="relative aspect-[4/3] w-full bg-[radial-gradient(circle_at_center,_#FFFFFF_0%,_#F1F5F9_100%)] p-4 flex items-center justify-center overflow-hidden">
@@ -1756,7 +1970,7 @@ function ProductCard({ product, isSaved, onToggleSave, onViewDetails, onWhatsApp
           className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-500"
         />
         <span className="absolute top-3 left-3 px-2.5 py-0.5 rounded-full bg-[#101828]/85 text-white text-[10px] font-bold">
-          Demo • {product.condition}
+          {product.condition}
         </span>
         <button
           onClick={onToggleSave}
@@ -1773,6 +1987,9 @@ function ProductCard({ product, isSaved, onToggleSave, onViewDetails, onWhatsApp
         <div>
           <span className="text-[11px] font-bold text-[#2563EB] uppercase">{product.brand}</span>
           <h3 className="text-base font-extrabold text-[#101828] mt-0.5 line-clamp-2">{product.name}</h3>
+          {product.shortDescription && (
+            <p className="mt-1 text-xs text-slate-500 line-clamp-2">{product.shortDescription}</p>
+          )}
           <div className="flex flex-wrap gap-1 mt-2">
             {product.specs.slice(0, 2).map((s) => (
               <span key={s} className="px-2 py-0.5 rounded-md bg-[#F3F6FA] text-slate-600 text-[11px] font-medium">
@@ -1784,10 +2001,13 @@ function ProductCard({ product, isSaved, onToggleSave, onViewDetails, onWhatsApp
 
         <div className="mt-4 pt-3 border-t border-slate-100 space-y-2.5">
           <div className="flex items-baseline gap-2">
-            <span className="font-price text-lg font-extrabold text-[#101828]">₹{product.price.toLocaleString('en-IN')}</span>
-            {hasDiscount && (
-              <span className="font-price text-xs text-slate-400 line-through">₹{product.originalPrice.toLocaleString('en-IN')}</span>
+            <span className="font-price text-lg font-extrabold text-[#101828]">₹{displayPrice.toLocaleString('en-IN')}</span>
+            {originalPrice && (
+              <span className="font-price text-xs text-slate-400 line-through">₹{originalPrice.toLocaleString('en-IN')}</span>
             )}
+            <span className={`ml-auto text-[10px] font-bold ${available ? 'text-emerald-700' : 'text-rose-600'}`}>
+              {getAvailabilityLabel(product.availabilityStatus)}
+            </span>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -1829,6 +2049,7 @@ function SinglePageAdminManager({
   setReviews,
   storeSettings,
   setStoreSettings,
+  apiEnabled,
   showToast,
   onBackToStore,
 }) {
@@ -1837,17 +2058,17 @@ function SinglePageAdminManager({
 
   // Product Form (Add or Inline Edit)
   const [editingProductId, setEditingProductId] = useState(null);
-  const [productForm, setProductForm] = useState({
-    name: '',
-    brand: 'Samsung',
-    category: 'Latest Smartphones',
-    price: '',
-    originalPrice: '',
-    condition: 'New',
-    image: IMAGES.samsungS25,
-    specsText: '5G, AMOLED Display, Fast Charge',
-    description: '',
-  });
+  const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM);
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+  const [imageMode, setImageMode] = useState('url');
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [deletingProductId, setDeletingProductId] = useState(null);
+
+  useEffect(() => () => {
+    if (imagePreviewUrl.startsWith('blob:')) URL.revokeObjectURL(imagePreviewUrl);
+  }, [imagePreviewUrl]);
 
   const adminFilteredProducts = useMemo(() => {
     return products.filter((p) => {
@@ -1860,47 +2081,119 @@ function SinglePageAdminManager({
     });
   }, [products, adminSearch, adminCatFilter]);
 
-  const handleSaveProduct = (e) => {
+  const adminProductCategories = useMemo(() => Array.from(new Set([
+    ...CATEGORIES.filter((category) => !category.isService).map((category) => category.id),
+    ...products.map((product) => product.category).filter(Boolean),
+  ])), [products]);
+
+  const handleSaveProduct = async (e) => {
     e.preventDefault();
-    if (!productForm.name.trim() || !productForm.price) {
-      showToast('Please enter product name and price.', 'error');
+    const price = Number(productForm.price);
+    const discountPrice = productForm.discountPrice ? Number(productForm.discountPrice) : null;
+    if (!productForm.name.trim() || !Number.isFinite(price) || price <= 0) {
+      showToast('Enter a product name and a valid price greater than zero.', 'error');
       return;
     }
-    const payload = {
-      id: editingProductId || `prod-${Date.now()}`,
-      name: productForm.name.trim(),
-      brand: productForm.brand,
-      category: productForm.category,
-      price: Number(productForm.price),
-      originalPrice: Number(productForm.originalPrice) || Number(productForm.price),
-      ram: '8GB',
-      storage: '128GB',
-      condition: productForm.condition,
-      image: productForm.image.trim() || IMAGES.iphone16,
-      specs: productForm.specsText.split(',').map((s) => s.trim()).filter(Boolean),
-      description: productForm.description || `${productForm.name} available at Verma Electronics, Main Sardarpura, Lalru.`,
-    };
-
-    if (editingProductId) {
-      setProducts((prev) => prev.map((p) => (p.id === editingProductId ? payload : p)));
-      showToast('Product updated in catalog!');
-      setEditingProductId(null);
-    } else {
-      setProducts((prev) => [payload, ...prev]);
-      showToast('New product published to storefront!');
+    if (discountPrice !== null && (!Number.isFinite(discountPrice) || discountPrice <= 0 || discountPrice >= price)) {
+      showToast('Discount price must be greater than zero and lower than the regular price.', 'error');
+      return;
+    }
+    if (imageMode === 'url' && productForm.image.trim()) {
+      try {
+        const imageUrl = new URL(productForm.image.trim());
+        if (!['http:', 'https:'].includes(imageUrl.protocol)) throw new Error();
+      } catch {
+        showToast('Enter a valid http or https image URL.', 'error');
+        return;
+      }
+    }
+    if (selectedImageFile && imageMode === 'upload' && !apiEnabled) {
+      showToast('Configure the product API and Cloudinary upload route to save uploaded images.', 'error');
+      return;
     }
 
-    setProductForm({
-      name: '',
-      brand: 'Samsung',
-      category: 'Latest Smartphones',
-      price: '',
-      originalPrice: '',
-      condition: 'New',
-      image: IMAGES.samsungS25,
-      specsText: '5G, AMOLED Display, Fast Charge',
-      description: '',
-    });
+    setSavingProduct(true);
+    try {
+      const currentProduct = products.find((product) => product.id === editingProductId);
+      let image = imageMode === 'url' ? productForm.image.trim() : currentProduct?.image || '';
+      if (selectedImageFile && imageMode === 'upload') {
+        setUploadingImage(true);
+        image = await uploadRemoteProductImage(selectedImageFile);
+        setUploadingImage(false);
+      }
+
+      const payload = {
+        ...(currentProduct || {}),
+        name: productForm.name.trim(),
+        brand: productForm.brand.trim(),
+        category: productForm.category,
+        price,
+        discountPrice,
+        originalPrice: discountPrice ? price : null,
+        condition: productForm.condition,
+        image,
+        images: currentProduct?.images || [],
+        specs: productForm.specsText.split(',').map((item) => item.trim()).filter(Boolean),
+        shortDescription: productForm.shortDescription.trim(),
+        description: productForm.description.trim(),
+        availabilityStatus: productForm.availabilityStatus,
+        isFeatured: productForm.isFeatured,
+        published: productForm.published,
+      };
+
+      let savedProduct = payload;
+      if (apiEnabled) {
+        const response = await saveRemoteProduct(payload, editingProductId);
+        const remoteRecord = response?.product || response;
+        if (!editingProductId && (remoteRecord?.id === undefined || remoteRecord?.id === null)) {
+          throw new Error('The product API must return the created product with its id.');
+        }
+        savedProduct = normalizeProduct({ ...payload, ...(remoteRecord || {}), id: remoteRecord?.id ?? editingProductId });
+      } else {
+        savedProduct = normalizeProduct({ ...payload, id: editingProductId || `prod-${Date.now()}` });
+      }
+
+      if (editingProductId) {
+        setProducts((previous) => previous.map((product) => (
+          product.id === editingProductId ? savedProduct : product
+        )));
+        showToast('Product updated successfully.');
+      } else {
+        setProducts((previous) => [savedProduct, ...previous]);
+        showToast('Product added successfully.');
+      }
+
+      setEditingProductId(null);
+      setProductForm(EMPTY_PRODUCT_FORM);
+      setSelectedImageFile(null);
+      setImagePreviewUrl('');
+      setImageMode('url');
+    } catch (error) {
+      setUploadingImage(false);
+      showToast(`Could not save product: ${error.message}`, 'error');
+    } finally {
+      setSavingProduct(false);
+    }
+  };
+
+  const handleDeleteProduct = async (product) => {
+    if (!window.confirm(`Delete "${product.name}" from the catalog?`)) return;
+    setDeletingProductId(product.id);
+    try {
+      if (apiEnabled) await deleteRemoteProduct(product.id);
+      setProducts((previous) => previous.filter((item) => item.id !== product.id));
+      if (editingProductId === product.id) {
+        setEditingProductId(null);
+        setProductForm(EMPTY_PRODUCT_FORM);
+        setSelectedImageFile(null);
+        setImagePreviewUrl('');
+      }
+      showToast('Product deleted.');
+    } catch (error) {
+      showToast(`Could not delete product: ${error.message}`, 'error');
+    } finally {
+      setDeletingProductId(null);
+    }
   };
 
   // Offer Form (Add or Inline Edit)
@@ -2123,9 +2416,13 @@ function SinglePageAdminManager({
                   </div>
                   <div>
                     <h2 className="text-base font-extrabold text-[#101828]">
-                      Product Catalog Manager ({products.length} Items)
+                                  Product Catalog Manager ({products.length} Items)
                     </h2>
-                    <p className="text-xs text-slate-500">Add new mobiles/appliances or edit existing items below</p>
+                                <p className="text-xs text-slate-500">
+                                  {apiEnabled
+                                    ? 'Connected to the product API. The server must authorize all product writes.'
+                                    : 'Local demo mode: products are saved in this browser only, not shared with customers on other devices.'}
+                                </p>
                   </div>
                 </div>
                 {editingProductId && (
@@ -2140,11 +2437,11 @@ function SinglePageAdminManager({
                 <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 bg-[#F8FAFC] p-5 rounded-2xl border border-slate-200/80">
                   <form onSubmit={handleSaveProduct} className="xl:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Product Title *</label>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Product Name *</label>
                       <input
                         type="text"
                         required
-                        placeholder="e.g., Apple iPhone 16 Pro Max or Samsung 253L Fridge"
+                        placeholder="e.g., Apple iPhone 16 Pro Max"
                         value={productForm.name}
                         onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#2563EB]"
@@ -2173,20 +2470,36 @@ function SinglePageAdminManager({
                         onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-medium"
                       >
-                        {CATEGORIES.filter((c) => !c.isService).map((c) => (
-                          <option key={c.id} value={c.id}>{c.title}</option>
+                        {adminProductCategories.map((category) => (
+                          <option key={category} value={category}>
+                            {CATEGORIES.find((item) => item.id === category)?.title || category}
+                          </option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Price (₹) *</label>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Regular Price (₹) *</label>
                       <input
                         type="number"
                         required
+                        min="0.01"
+                        step="0.01"
                         placeholder="e.g., 29999"
                         value={productForm.price}
                         onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Discount Price (₹, optional)</label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        placeholder="Leave empty for no discount"
+                        value={productForm.discountPrice}
+                        onChange={(e) => setProductForm({ ...productForm, discountPrice: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
                       />
                     </div>
                     <div>
@@ -2201,50 +2514,155 @@ function SinglePageAdminManager({
                         <option value="Used">Used / Second-Hand</option>
                       </select>
                     </div>
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Photo URL</label>
-                      <input
-                        type="text"
-                        placeholder="https://..."
-                        value={productForm.image}
-                        onChange={(e) => setProductForm({ ...productForm, image: e.target.value })}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
-                      />
+                    <div className="sm:col-span-2">
+                      <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Product Image</span>
+                      <div className="flex gap-2 mb-3">
+                        <button
+                          type="button"
+                          onClick={() => setImageMode('url')}
+                          className={`px-3 py-2 rounded-lg text-xs font-bold ${imageMode === 'url' ? 'bg-[#2563EB] text-white' : 'bg-white border border-slate-200 text-slate-700'}`}
+                        >
+                          Image URL
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImageMode('upload')}
+                          className={`px-3 py-2 rounded-lg text-xs font-bold ${imageMode === 'upload' ? 'bg-[#2563EB] text-white' : 'bg-white border border-slate-200 text-slate-700'}`}
+                        >
+                          Upload image
+                        </button>
+                      </div>
+                      {imageMode === 'url' ? (
+                        <label className="block">
+                          <span className="sr-only">Product image URL</span>
+                          <input
+                            type="url"
+                            placeholder="https://example.com/product-image.jpg"
+                            value={productForm.image}
+                            onChange={(e) => setProductForm({ ...productForm, image: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
+                          />
+                        </label>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-semibold cursor-pointer ${!apiEnabled ? 'opacity-60' : ''}`}>
+                            <ImagePlus className="w-4 h-4" />
+                            Choose image
+                            <input
+                              type="file"
+                              accept="image/*"
+                              disabled={!apiEnabled || uploadingImage || savingProduct}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (!file) return;
+                                setSelectedImageFile(file);
+                                setImagePreviewUrl(URL.createObjectURL(file));
+                              }}
+                              className="sr-only"
+                            />
+                          </label>
+                          {(selectedImageFile || productForm.image) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedImageFile(null);
+                                setImagePreviewUrl('');
+                                setProductForm({ ...productForm, image: '' });
+                              }}
+                              className="px-3 py-2 rounded-xl text-sm font-semibold text-rose-700 bg-rose-50"
+                            >
+                              Remove image
+                            </button>
+                          )}
+                          <span className="text-xs text-slate-500">
+                            {apiEnabled ? 'Images are uploaded securely through your configured API.' : 'Image uploads require the configured product API; use an image URL in local demo mode.'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Highlights</label>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Features / Specifications (comma separated)</label>
                       <input
                         type="text"
-                        placeholder="5G, 8GB RAM, 256GB"
+                        placeholder="5G, 8GB RAM, 256GB storage"
                         value={productForm.specsText}
                         onChange={(e) => setProductForm({ ...productForm, specsText: e.target.value })}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
                       />
                     </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Availability</label>
+                      <select
+                        value={productForm.availabilityStatus}
+                        onChange={(e) => setProductForm({ ...productForm, availabilityStatus: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
+                      >
+                        <option value="in_stock">In stock</option>
+                        <option value="out_of_stock">Out of stock</option>
+                        <option value="preorder">Pre-order</option>
+                        <option value="available">Available</option>
+                        <option value="unavailable">Unavailable</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Short Description</label>
+                      <input
+                        type="text"
+                        maxLength={240}
+                        placeholder="A brief summary shown on product cards"
+                        value={productForm.shortDescription}
+                        onChange={(e) => setProductForm({ ...productForm, shortDescription: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Full Product Description</label>
+                      <textarea
+                        rows="3"
+                        placeholder="Describe the product and its key benefits"
+                        value={productForm.description}
+                        onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm resize-y"
+                      />
+                    </div>
+                    <div className="sm:col-span-2 flex flex-wrap gap-x-5 gap-y-2">
+                      <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={productForm.isFeatured}
+                          onChange={(e) => setProductForm({ ...productForm, isFeatured: e.target.checked })}
+                          className="accent-[#2563EB]"
+                        />
+                        Featured product
+                      </label>
+                      <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={productForm.published}
+                          onChange={(e) => setProductForm({ ...productForm, published: e.target.checked })}
+                          className="accent-[#2563EB]"
+                        />
+                        Published on storefront
+                      </label>
+                    </div>
                     <div className="sm:col-span-2 flex flex-wrap gap-2.5 pt-1">
                       <button
                         type="submit"
-                        className="px-6 py-3 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs sm:text-sm font-bold shadow-sm transition flex items-center gap-1.5"
+                        disabled={savingProduct}
+                        className="px-6 py-3 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white text-xs sm:text-sm font-bold shadow-sm transition flex items-center gap-1.5"
                       >
-                        <Plus className="w-4 h-4" />
-                        <span>{editingProductId ? 'Save Product Changes' : 'Add Product to Store'}</span>
+                        {savingProduct ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        <span>{uploadingImage ? 'Uploading image…' : savingProduct ? 'Saving…' : editingProductId ? 'Save Product Changes' : 'Add Product to Store'}</span>
                       </button>
                       {editingProductId && (
                         <button
                           type="button"
                           onClick={() => {
                             setEditingProductId(null);
-                            setProductForm({
-                              name: '',
-                              brand: 'Samsung',
-                              category: 'Latest Smartphones',
-                              price: '',
-                              originalPrice: '',
-                              condition: 'New',
-                              image: IMAGES.samsungS25,
-                              specsText: '5G, AMOLED Display, Fast Charge',
-                              description: '',
-                            });
+                            setProductForm(EMPTY_PRODUCT_FORM);
+                            setSelectedImageFile(null);
+                            setImagePreviewUrl('');
+                            setImageMode('url');
                           }}
                           className="px-4 py-3 rounded-xl bg-white border border-slate-300 text-slate-700 text-xs font-bold"
                         >
@@ -2262,7 +2680,7 @@ function SinglePageAdminManager({
                       </span>
                       <div className="aspect-[4/3] w-full rounded-xl bg-[#F8FAFC] p-3 flex items-center justify-center overflow-hidden border border-slate-100">
                         <SafeImage
-                          src={productForm.image}
+                          src={imagePreviewUrl || productForm.image}
                           alt={productForm.name || 'Preview'}
                           className="max-h-full max-w-full object-contain"
                         />
@@ -2273,12 +2691,15 @@ function SinglePageAdminManager({
                           {productForm.name || 'Product Name Preview'}
                         </h4>
                         <p className="text-base font-extrabold text-[#101828] mt-1">
-                          <span className="font-price">₹{Number(productForm.price || 0).toLocaleString('en-IN')}</span>
+                          <span className="font-price">₹{Number(productForm.discountPrice || productForm.price || 0).toLocaleString('en-IN')}</span>
+                          {productForm.discountPrice && (
+                            <span className="font-price ml-2 text-xs text-slate-400 line-through">₹{Number(productForm.price || 0).toLocaleString('en-IN')}</span>
+                          )}
                         </p>
                       </div>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-100">
-                      Instant live sync with customer catalog.
+                      {apiEnabled ? 'Changes sync with the connected product API.' : 'Local demo mode: changes are saved in this browser only.'}
                     </p>
                   </div>
                 </div>
@@ -2301,8 +2722,10 @@ function SinglePageAdminManager({
                     className="px-3.5 py-2.5 rounded-xl bg-[#F8FAFC] border border-slate-200 text-sm font-semibold"
                   >
                     <option value="All">All Departments ({products.length})</option>
-                    {CATEGORIES.filter((c) => !c.isService).map((c) => (
-                      <option key={c.id} value={c.id}>{c.title}</option>
+                    {adminProductCategories.map((category) => (
+                      <option key={category} value={category}>
+                        {CATEGORIES.find((item) => item.id === category)?.title || category}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -2327,23 +2750,39 @@ function SinglePageAdminManager({
                         <div className="min-w-0">
                           <span className="text-[10px] font-bold uppercase text-[#2563EB]">{p.brand} • {p.condition}</span>
                           <p className="text-sm font-extrabold text-[#101828] truncate">{p.name}</p>
-                          <p className="font-price text-xs font-bold text-slate-600">₹{p.price.toLocaleString('en-IN')}</p>
+                          <p className="font-price text-xs font-bold text-slate-600">₹{(p.discountPrice || p.price).toLocaleString('en-IN')}</p>
+                          <p className="text-[10px] font-semibold text-slate-500">
+                            {p.published === false ? 'Unpublished' : 'Published'} · {p.availabilityStatus.replaceAll('_', ' ')}
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <button
                           onClick={() => {
                             setEditingProductId(p.id);
+                            setSelectedImageFile(null);
+                            setImagePreviewUrl('');
+                            setImageMode('url');
                             setProductForm({
                               name: p.name,
                               brand: p.brand,
                               category: p.category,
-                              price: String(p.price),
-                              originalPrice: String(p.originalPrice || ''),
+                              price: String(
+                                p.discountPrice ? p.price
+                                  : p.originalPrice > p.price ? p.originalPrice
+                                    : p.price
+                              ),
+                              discountPrice: String(
+                                p.discountPrice || (p.originalPrice > p.price ? p.price : '')
+                              ),
                               condition: p.condition,
                               image: p.image,
                               specsText: (p.specs || []).join(', '),
+                              shortDescription: p.shortDescription || '',
                               description: p.description || '',
+                              availabilityStatus: p.availabilityStatus || 'in_stock',
+                              isFeatured: p.isFeatured === true,
+                              published: p.published !== false,
                             });
                           }}
                           className="px-3 py-2 rounded-xl bg-[#F3F6FA] hover:bg-[#2563EB] hover:text-white text-[#101828] text-xs font-bold transition"
@@ -2351,14 +2790,14 @@ function SinglePageAdminManager({
                           Edit
                         </button>
                         <button
-                          onClick={() => {
-                            setProducts((prev) => prev.filter((item) => item.id !== p.id));
-                            showToast('Product removed.');
-                          }}
-                          className="p-2 rounded-xl bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-600 transition"
+                          disabled={deletingProductId === p.id}
+                          onClick={() => handleDeleteProduct(p)}
+                          className="p-2 rounded-xl bg-rose-50 hover:bg-rose-600 hover:text-white disabled:opacity-50 text-rose-600 transition"
                           title="Delete product"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {deletingProductId === p.id
+                            ? <LoaderCircle className="w-4 h-4 animate-spin" />
+                            : <Trash2 className="w-4 h-4" />}
                         </button>
                       </div>
                     </div>
