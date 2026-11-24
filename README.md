@@ -28,3 +28,9 @@ The production output is generated in `dist/`.
 - Node.js version: `20.19.0` or newer
 
 No environment variables or secrets are required by the current application.
+
+The Cloudflare project must be created as **Pages**, not **Workers**.
+Do not set a custom deploy command or add `wrangler.toml`/`wrangler.jsonc`
+for this static Vite site. If the dashboard currently shows a `workers.dev`
+deployment URL, change the Git integration project to a Pages project or
+create a new Pages project for this GitHub repository.
